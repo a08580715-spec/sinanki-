@@ -1,0 +1,267 @@
+-- === サービスと基本変数の定義 ===
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- 実行環境を考慮し、安全にUIの親（PlayerGui）を指定
+local TargetParent = LocalPlayer:WaitForChild("PlayerGui")
+
+-- 既存の古いUIがあれば削除
+local oldGui = TargetParent:FindFirstChild("Combined_Utility_Menu") or game:GetService("CoreGui"):FindFirstChild("Combined_Utility_Menu")
+if oldGui then oldGui:Destroy() end
+
+local oldGui2 = TargetParent:FindFirstChild("BackRotatedMoveGuiV2") or game:GetService("CoreGui"):FindFirstChild("BackRotatedMoveGuiV2")
+if oldGui2 then oldGui2:Destroy() end
+
+local oldGui3 = TargetParent:FindFirstChild("StudyMenu_Final")
+if oldGui3 then oldGui3:Destroy() end
+
+-- === 【調整パラメータ】 ===
+-- エイム設定
+local FOV_RADIUS = 181
+local LOCK_STRENGTH = 0.55
+local PREDICTION = 0.0125 
+local HEADSHOT_CHANCE = 50 
+local ESP_NAME = "StandardESP"
+local SAFE_SPEED = 24 
+
+-- 仰向け移動設定
+local FALLEN_SPEED = 24
+local JUMP_POWER = 55
+local ROTATION_SPEED = 180 -- 回転速度（度/秒）
+
+-- === 管理用変数 ===
+local isAimbotEnabled = false
+local isESPEnabled = false
+local isDownEnabled = false
+
+local fallenLoopConnection = nil
+local fallenJumpConnection = nil
+local spaceConnection = nil
+
+-- === 1. 統合UI表示（右上に固定、動かない設定） ===
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "Combined_Utility_Menu"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = TargetParent
+
+-- メインフレーム
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 220, 0, 200)
+MainFrame.Position = UDim2.new(1, -230, 0, 10)
+MainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+MainFrame.Active = true
+MainFrame.Draggable = false
+MainFrame.Parent = ScreenGui
+
+local uiCorner = Instance.new("UICorner")
+uiCorner.CornerRadius = UDim.new(0, 8)
+uiCorner.Parent = MainFrame
+
+-- タイトル
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 25)
+Title.Position = UDim2.new(0, 0, 0, 0)
+Title.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+Title.Text = "⚡ 統合ユーティリティ ⚡"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextScaled = true
+Title.Font = Enum.Font.GothamBold
+Title.Parent = MainFrame
+
+-- エイムボット用トグルボタン
+local AimButton = Instance.new("TextButton")
+AimButton.Size = UDim2.new(0.9, 0, 0, 40)
+AimButton.Position = UDim2.new(0.05, 0, 0.17, 0)
+AimButton.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
+AimButton.Text = "AIMBOT: OFF"
+AimButton.TextSize = 16
+AimButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+AimButton.Font = Enum.Font.SourceSansBold
+AimButton.Parent = MainFrame
+
+local aimCorner = Instance.new("UICorner")
+aimCorner.CornerRadius = UDim.new(0, 6)
+aimCorner.Parent = AimButton
+
+-- ESP用トグルボタン
+local ESPButton = Instance.new("TextButton")
+ESPButton.Size = UDim2.new(0.9, 0, 0, 40)
+ESPButton.Position = UDim2.new(0.05, 0, 0.42, 0)
+ESPButton.BackgroundColor3 = Color3.fromRGB(150, 150, 0)
+ESPButton.Text = "ESP: OFF"
+ESPButton.TextSize = 16
+ESPButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ESPButton.Font = Enum.Font.SourceSansBold
+ESPButton.Parent = MainFrame
+
+local espCorner = Instance.new("UICorner")
+espCorner.CornerRadius = UDim.new(0, 6)
+espCorner.Parent = ESPButton
+
+-- 仰向け用トグルボタン
+local DownButton = Instance.new("TextButton")
+DownButton.Size = UDim2.new(0.9, 0, 0, 40)
+DownButton.Position = UDim2.new(0.05, 0, 0.67, 0)
+DownButton.BackgroundColor3 = Color3.fromRGB(90, 255, 90)
+DownButton.Text = "仰向けに倒す"
+DownButton.TextSize = 16
+DownButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+DownButton.Font = Enum.Font.SourceSansBold
+DownButton.Parent = MainFrame
+
+local downCorner = Instance.new("UICorner")
+downCorner.CornerRadius = UDim.new(0, 6)
+downCorner.Parent = DownButton
+
+
+-- === 2. ESP機能 ===
+local function updateESP()
+    if not isESPEnabled then
+        for _, player in pairs(Players:GetPlayers()) do
+            if player.Character then
+                for _, part in pairs(player.Character:GetChildren()) do
+                    local esp = part:FindFirstChild(ESP_NAME)
+                    if esp then esp:Destroy() end
+                end
+            end
+        end
+        return
+    end
+
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local isEnemy = (player.Team ~= LocalPlayer.Team or player.Team == nil)
+            local char = player.Character
+            if char and isEnemy then
+                local targetPart = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head")
+                if targetPart then
+                    local esp = targetPart:FindFirstChild(ESP_NAME)
+                    if not esp then
+                        local b = Instance.new("BillboardGui", targetPart)
+                        b.Name = ESP_NAME
+                        b.AlwaysOnTop = true
+                        b.Size = UDim2.new(4, 0, 4.5, 0)
+                        b.StudsOffset = Vector3.new(0, 3, 0)
+                        
+                        local icon = Instance.new("ImageLabel", b)
+                        icon.Size = UDim2.new(0.5, 0, 0.5, 0)
+                        icon.Position = UDim2.new(0.25, 0, 0, 0)
+                        icon.BackgroundTransparency = 1
+                        icon.Image = "rbxthumb://type=AvatarHeadShot&id=" .. player.UserId .. "&w=150&h=150"
+                        
+                        local l = Instance.new("TextLabel", b)
+                        l.Size = UDim2.new(1, 0, 0.3, 0)
+                        l.Position = UDim2.new(0, 0, 0.55, 0)
+                        l.Text = player.Name
+                        l.TextColor3 = Color3.fromRGB(255, 0, 0)
+                        l.TextStrokeTransparency = 0
+                        l.BackgroundTransparency = 1
+                        l.TextScaled = true
+                        l.Font = Enum.Font.SourceSansBold
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- === 3. ロジック：可視判定と高精度部位選択 ===
+local function isPartVisible(part)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
+    local result = workspace:Raycast(Camera.CFrame.Position, part.Position - Camera.CFrame.Position, params)
+    return not result or result.Instance:IsDescendantOf(part.Parent)
+end
+
+local function getBestTarget()
+    local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local minWeight = math.huge
+    local targetPart = nil
+    
+    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil end
+
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and (player.Team ~= LocalPlayer.Team or player.Team == nil) then
+            local char = player.Character
+            local root = char:FindFirstChild("HumanoidRootPart")
+            local head = char:FindFirstChild("Head")
+            local hum = char:FindFirstChild("Humanoid")
+            
+            if hum and hum.Health > 0 then
+                local selectedPart = nil
+                local forceHeadshot = (math.random(1, 100) <= HEADSHOT_CHANCE)
+
+                if forceHeadshot and head and isPartVisible(head) then
+                    selectedPart = head
+                elseif root and isPartVisible(root) then
+                    selectedPart = root
+                elseif head and isPartVisible(head) then
+                    selectedPart = head
+                end
+
+                if selectedPart then
+                    local pos, onScreen = Camera:WorldToViewportPoint(selectedPart.Position)
+                    if onScreen then
+                        local fovDist = (Vector2.new(pos.X, pos.Y) - screenCenter).Magnitude
+                        if fovDist < FOV_RADIUS then
+                            local distToMe = (selectedPart.Position - myRoot.Position).Magnitude
+                            local weight = distToMe + (fovDist * 0.4)
+                            if weight < minWeight then
+                                targetPart = selectedPart
+                                minWeight = weight
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return targetPart
+end
+
+-- === 4. 速度監視設定 ===
+local function setupSpeedLock(char)
+    local hum = char:WaitForChild("Humanoid")
+    hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+        if isAimbotEnabled and hum.WalkSpeed ~= SAFE_SPEED then
+            hum.WalkSpeed = SAFE_SPEED
+        end
+    end)
+end
+
+if LocalPlayer.Character then setupSpeedLock(LocalPlayer.Character) end
+LocalPlayer.CharacterAdded:Connect(setupSpeedLock)
+
+-- === 5. 仰向け＋360度回転機能（ジャンプで自動起き上がり版） ===
+local function disableDownMode()
+    if fallenLoopConnection then fallenLoopConnection:Disconnect() fallenLoopConnection = nil end
+    if fallenJumpConnection then fallenJumpConnection:Disconnect() fallenJumpConnection = nil end
+    if spaceConnection then spaceConnection:Disconnect() spaceConnection = nil end
+    
+    local character = LocalPlayer.Character
+    if character then
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if humanoid then humanoid.PlatformStand = false end
+        if rootPart then
+            local _, yaw, _ = rootPart.CFrame:ToOrientation()
+            rootPart.CFrame = CFrame.new(rootPart.Position) * CFrame.fromOrientation(0, yaw, 0)
+            rootPart.AssemblyLinearVelocity = Vector3.new(0, rootPart.AssemblyLinearVelocity.Y, 0)
+        end
+    end
+    
+    DownButton.Text = "仰向けに倒す"
+    DownButton.BackgroundColor3 = Color3.fromRGB(90, 255, 90)
+    isDownEnabled = false
+end
+
+local function enableDownMode()
+    local character = LocalPlayer.Character
+    if not character then return end
+    
+    local humanoid = character:FindFirstC
